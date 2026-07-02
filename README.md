@@ -1,3 +1,5 @@
+# DEMO: http://127.0.0.1:5000
+
 # 臺灣即時氣象觀測儀表板 (HW-10 - PyWebIO)
 
 本專案是一個利用 Python 自動爬取中央氣象署（CWA）觀測站數據的 Web 應用程式。抓取到的數據會先儲存為 CSV 格式，接著寫入 SQLite3 資料庫中，最後透過 **PyWebIO** 後端伺服器與具備玻璃擬態（Glassmorphism）質感的現代化 Leaflet 互動地圖介面進行視覺化呈現。
