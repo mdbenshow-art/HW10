@@ -1,154 +1,101 @@
 import os
 import json
 import sqlite3
-from datetime import datetime
 from pywebio import start_server
-from pywebio.output import put_html, put_buttons, clear
-import pywebio.session
+from pywebio.output import put_html
+from pywebio.session import set_env, run_js
+from pywebio.pin import put_input, pin_wait_change
 import crawler
 
 DB_FILE = "weather.db"
 
-def get_db_connection():
-    """Establishes connection to the SQLite3 database."""
+def query_latest_stations():
+    """Queries all observations from the SQLite database."""
+    if not os.path.exists(DB_FILE):
+        try:
+            crawler.run_crawler()
+        except Exception as e:
+            print("Initial crawler execution failed:", e)
+            
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
-    return conn
-
-def get_latest_temperature_data():
-    """Retrieves weather observations from SQLite3 and structures them for front-end."""
-    if not os.path.exists(DB_FILE):
-        crawler.run_crawler()
-        
-    conn = get_db_connection()
     cursor = conn.cursor()
+    
+    stations = []
     try:
         cursor.execute("SELECT * FROM weather_observations")
         rows = cursor.fetchall()
-    except sqlite3.OperationalError:
+        for row in rows:
+            r = dict(row)
+            if r['temperature'] is None or r['temperature'] <= -90:
+                continue
+            stations.append({
+                "station_id": r['station_id'],
+                "station_name": r['station_name'],
+                "county": r['county_name'],
+                "town": r['town_name'],
+                "lat": r['latitude'],
+                "lon": r['longitude'],
+                "altitude_m": r['altitude'],
+                "observed_at": r['obs_time'],
+                "temperature_c": r['temperature'],
+                "humidity_percent": r['humidity'] if r['humidity'] >= 0 else None,
+                "wind_speed_mps": r['wind_speed'] if r['wind_speed'] >= 0 else None,
+                "precipitation_mm": r['precipitation'] if r['precipitation'] >= 0 else 0.0,
+                "weather": r['weather']
+            })
+    except sqlite3.OperationalError as e:
+        print("Database query failed:", e)
+    finally:
         conn.close()
-        # Fallback in case table doesn't exist
-        crawler.run_crawler()
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM weather_observations")
-        rows = cursor.fetchall()
         
-    stations = []
-    latest_obs_time = None
-    
-    for row in rows:
-        r = dict(row)
-        # Skip stations with invalid temperature
-        if r['temperature'] is None or r['temperature'] <= -90:
-            continue
-            
-        # Keep track of the most recent observation time
-        obs_time_str = r['obs_time']
-        if obs_time_str:
-            if not latest_obs_time or obs_time_str > latest_obs_time:
-                latest_obs_time = obs_time_str
-                
-        stations.append({
-            "station_id": r['station_id'],
-            "station_name": r['station_name'],
-            "county": r['county_name'],
-            "town": r['town_name'],
-            "lat": r['latitude'],
-            "lon": r['longitude'],
-            "altitude_m": r['altitude'],
-            "observed_at": r['obs_time'],
-            "temperature_c": r['temperature'],
-            "humidity_percent": r['humidity'] if r['humidity'] >= 0 else None,
-            "wind_speed_mps": r['wind_speed'] if r['wind_speed'] >= 0 else None,
-            "precipitation_mm": r['precipitation'] if r['precipitation'] >= 0 else 0.0,
-            "weather": r['weather']
-        })
-        
-    conn.close()
-    
-    # Format the updated_at time
-    updated_at_str = latest_obs_time if latest_obs_time else datetime.now().isoformat()
-    
-    return {
-        "source": "CWA",
-        "updated_at": updated_at_str,
-        "count": len(stations),
-        "stations": stations
-    }
+    return stations
 
 def main_app():
-    """Main PyWebIO Web Application Entry Point."""
-    # Set PyWebIO page title
-    pywebio.session.set_env(title="臺灣即時氣象觀測與 Windy 視覺化地圖")
+    """PyWebIO Main Web Application Entry Point."""
+    # Set PyWebIO environment settings
+    set_env(title="臺灣即時氣象觀測與 Windy 視覺化地圖 (PyWebIO)", auto_scroll_to_bottom=False)
     
-    # Clear the PyWebIO session
-    clear()
-    
-    # 1. Fetch latest data from database
-    weather_data = get_latest_temperature_data()
-    
-    # 2. Read templates/index.html
-    with open("templates/index.html", "r", encoding="utf-8") as f:
-        html_template = f.read()
+    # Load templates/index.html
+    html_path = os.path.join("templates", "index.html")
+    if os.path.exists(html_path):
+        with open(html_path, "r", encoding="utf-8") as f:
+            html_content = f.read()
+    else:
+        html_content = "<h2>Error: templates/index.html not found.</h2>"
         
-    # 3. Inject CWA weather data and Windy API Key as global JS variables
-    windy_key = os.environ.get("WINDY_API_KEY") or os.environ.get("NEXT_PUBLIC_WINDY_API_KEY") or ""
-    
-    injected_js = f"""
-    <script>
-        window.initialWeatherData = {json.dumps(weather_data)};
-        window.windyApiKey = "{windy_key}";
-    </script>
-    """
-    
-    html_content = html_template.replace("</head>", injected_js + "</head>")
-    
-    # Remove standard script tag loads from HTML body/head to prevent innerHTML blocking issues
-    html_content = html_content.replace('<script src="https://unpkg.com/leaflet@1.4.0/dist/leaflet.js"></script>', '')
-    html_content = html_content.replace('<script src="https://api.windy.com/assets/map-forecast/libBoot.js"></script>', '')
-    html_content = html_content.replace('<script src="/static/js/main.js" defer></script>', '')
-    
-    # 4. Render the dashboard layout via put_html()
+    # Render the main dashboard HTML content
     put_html(html_content)
     
-    # 5. Load Leaflet, Windy and main.js dynamically to guarantee execution in PyWebIO SPA
-    pywebio.session.run_js("""
-        function loadScript(src) {
-            return new Promise((resolve, reject) => {
-                let script = document.createElement('script');
-                script.src = src;
-                script.onload = () => resolve();
-                script.onerror = () => reject(new Error('Failed to load ' + src));
-                document.body.appendChild(script);
-            });
-        }
-        
-        // Sequentially load dependencies to prevent race conditions
-        loadScript('https://unpkg.com/leaflet@1.4.0/dist/leaflet.js')
-            .then(() => loadScript('https://api.windy.com/assets/map-forecast/libBoot.js'))
-            .then(() => loadScript('/static/js/main.js'))
-            .then(() => {
-                console.log("All scripts dynamically executed successfully in PyWebIO!");
-            })
-            .catch(err => {
-                console.error("Script load error:", err);
-            });
-    """)
+    # Render hidden PyWebIO input pin to receive refresh events from JavaScript
+    put_html('<div style="display:none;">')
+    put_input('refresh_trigger', value='')
+    put_html('</div>')
     
-    # 6. Render a hidden PyWebIO button to handle asynchronous JS sync/refresh actions
-    def handle_refresh():
+    # Get latest weather data from database
+    stations = query_latest_stations()
+    
+    # Push initial CWA station list into browser Leaflet Map
+    run_js(f"window.updateCwaMapData({json.dumps(stations)});")
+    
+    # Event loop listening for client-side refresh triggers
+    while True:
+        pin_wait_change('refresh_trigger')
         try:
+            # Sync fresh CWA data in Python
             crawler.run_crawler()
-            # Force browser reload to get fresh CWA data
-            pywebio.session.run_js("window.location.reload();")
+            # Query updated records
+            new_stations = query_latest_stations()
+            # Push updated data to Leaflet in the browser
+            run_js(f"window.updateCwaMapData({json.dumps(new_stations)});")
+            run_js("showToast('同步成功，已寫入 SQLite3 資料庫與 CSV 檔案');")
         except Exception as e:
-            pywebio.session.run_js(f"alert('Refresh failed: {str(e)}');")
-            
-    put_buttons(['pywebio_refresh'], onclick=[handle_refresh]).style('display: none;')
-    
-    # Keep session alive to handle onclick callbacks
-    pywebio.session.hold()
+            run_js(f"showToast('資料同步失敗: {str(e)}', 'error');")
+        finally:
+            # Tell JavaScript to disable loading states
+            run_js("toggleLoading(false);")
 
 if __name__ == "__main__":
-    start_server(main_app, host="127.0.0.1", port=5000, debug=True, static_dir="static")
+    print("Starting PyWebIO weather server on http://127.0.0.1:5000...")
+    # Start PyWebIO standalone server serving './static' as static dir
+    start_server(main_app, port=5000, static_dir='static', debug=True)

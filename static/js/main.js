@@ -31,20 +31,10 @@ let currentBaseTileLayer = null;
 let rainRadarLayer = null;
 
 // Initial Entry
-if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    initDashboard();
-} else {
-    document.addEventListener('DOMContentLoaded', initDashboard);
-}
-
-function initDashboard() {
+document.addEventListener('DOMContentLoaded', () => {
     initLegend();
     initCollapsibleTable();
-    loadDashboard();
-    
-    // Auto refresh every 5 minutes
-    setInterval(loadDashboard, 300000);
-}
+});
 
 // Build Legend UI
 function initLegend() {
@@ -79,61 +69,28 @@ function initCollapsibleTable() {
     });
 }
 
-// Main Ingestion Workflow
-async function loadDashboard() {
-    // Check if data is already injected by PyWebIO
-    if (window.initialWeatherData) {
-        allStations = window.initialWeatherData.stations;
-        populateCountyFilter(allStations);
-        renderExtremes(allStations);
-        renderTable(allStations);
-        
-        const windyKey = window.windyApiKey || "";
-        initOrUpdateMap(windyKey, allStations);
-        
-        document.getElementById('last-update-time').innerText = `資料時間：${formatTime(window.initialWeatherData.updated_at)}`;
-        document.getElementById('cache-status').innerText = `系統狀態：觀測中 (${allStations.length} 站)`;
-        return;
-    }
-
-    toggleLoading(true, "正在獲取氣象署即時觀測數據...");
+// Main Ingestion Workflow triggered by PyWebIO push
+window.updateCwaMapData = function(stations) {
+    allStations = stations;
     
-    try {
-        // Fetch API key and observations in parallel
-        const [configRes, weatherRes] = await Promise.all([
-            fetch('/api/config'),
-            fetch('/api/temperature/latest')
-        ]);
-        
-        const config = await configRes.json();
-        const weather = await weatherRes.json();
-        
-        if (weather.source) {
-            allStations = weather.stations;
-            
-            // Populate County dropdown filters
-            populateCountyFilter(allStations);
-            
-            // Render side tables (Top 5 Hottest / Coldest)
-            renderExtremes(allStations);
-            
-            // Render Bottom Table rows
-            renderTable(allStations);
-            
-            // Render Map View
-            initOrUpdateMap(config.windy_api_key, allStations);
-            
-            // Status bar updates
-            document.getElementById('last-update-time').innerText = `資料時間：${formatTime(weather.updated_at)}`;
-            document.getElementById('cache-status').innerText = `系統狀態：觀測中 (${allStations.length} 站)`;
-        }
-    } catch (err) {
-        console.error("Dashboard ingestion failed:", err);
-        showToast("資料讀取失敗，使用快取或重新連線", "error");
-    } finally {
-        toggleLoading(false);
+    // Populate County dropdown filters
+    populateCountyFilter(allStations);
+    
+    // Render side tables (Top 5 Hottest / Coldest)
+    renderExtremes(allStations);
+    
+    // Render Bottom Table rows
+    renderTable(allStations);
+    
+    // Render Map View
+    initOrUpdateMap('', allStations);
+    
+    // Status bar updates
+    if (stations.length > 0) {
+        document.getElementById('last-update-time').innerText = `資料時間：${formatTime(stations[0].observed_at)}`;
     }
-}
+    document.getElementById('cache-status').innerText = `系統狀態：正常 (${allStations.length} 站)`;
+};
 
 // Populating County Dropdown
 function populateCountyFilter(stations) {
@@ -367,13 +324,7 @@ function setupMapListeners() {
     
     // Manual sync refresh
     document.getElementById('refresh-btn').addEventListener('click', () => {
-        const pyBtn = document.querySelector('button[value="pywebio_refresh"]');
-        if (pyBtn) {
-            toggleLoading(true, "正在與中央氣象署同步最新測站數據...");
-            pyBtn.click();
-        } else {
-            refreshWeatherData();
-        }
+        refreshWeatherData();
     });
     
     // Setup Windy background switcher if Windy is running, otherwise use Leaflet simulation
@@ -397,31 +348,17 @@ function setupMapListeners() {
     });
 }
 
-// Refresh Data (API post)
+// Trigger data refresh in Python via PyWebIO input pin
 async function refreshWeatherData() {
     toggleLoading(true, "正在與中央氣象署同步最新測站數據...");
     const icon = document.querySelector('#refresh-btn i');
-    icon.classList.add('fa-spin');
+    if (icon) icon.classList.add('fa-spin');
     
-    try {
-        const res = await fetch('/api/refresh', { method: 'POST' });
-        const weather = await res.json();
-        
-        if (weather.source) {
-            allStations = weather.stations;
-            renderExtremes(allStations);
-            renderTable(allStations);
-            drawCwaOverlay();
-            
-            document.getElementById('last-update-time').innerText = `資料時間：${formatTime(weather.updated_at)}`;
-            showToast('同步成功，已寫入 SQLite3 資料庫與 CSV 檔案');
-        }
-    } catch (e) {
-        console.error("Manual refresh failed:", e);
-        showToast("同步失敗，請檢查 API 連接", "error");
-    } finally {
-        toggleLoading(false);
-        icon.classList.remove('fa-spin');
+    // Set value of the hidden PyWebIO input pin to trigger refresh in Python
+    const input = document.querySelector('input[name="refresh_trigger"]');
+    if (input) {
+        input.value = Date.now().toString(); // Use timestamp to ensure change is detected
+        input.dispatchEvent(new Event('input'));
     }
 }
 
