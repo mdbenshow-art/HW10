@@ -1,30 +1,13 @@
 import os
+import json
 import sqlite3
-from contextlib import asynccontextmanager
 from datetime import datetime
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from pywebio import start_server
+from pywebio.output import put_html, put_buttons, clear
+import pywebio.session
 import crawler
 
 DB_FILE = "weather.db"
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Handles startup and shutdown lifecycle events."""
-    # Run initial crawler if database is missing
-    if not os.path.exists(DB_FILE):
-        print("Database not found, running crawler initially...")
-        try:
-            crawler.run_crawler()
-        except Exception as e:
-            print("Initial crawling error during startup:", e)
-    yield
-
-app = FastAPI(lifespan=lifespan)
-
-# Mount Static Files (CSS, JS)
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 def get_db_connection():
     """Establishes connection to the SQLite3 database."""
@@ -32,29 +15,24 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-@app.get("/", response_class=FileResponse)
-async def get_dashboard():
-    """Serves the main dashboard page."""
-    return FileResponse("templates/index.html")
-
-@app.get("/api/temperature/latest")
-async def get_latest_temperature():
-    """GET /api/temperature/latest - Returns all latest station observations in normalized format."""
+def get_latest_temperature_data():
+    """Retrieves weather observations from SQLite3 and structures them for front-end."""
     if not os.path.exists(DB_FILE):
-        try:
-            crawler.run_crawler()
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to run crawler: {str(e)}")
-            
+        crawler.run_crawler()
+        
     conn = get_db_connection()
     cursor = conn.cursor()
-    
     try:
         cursor.execute("SELECT * FROM weather_observations")
         rows = cursor.fetchall()
-    except sqlite3.OperationalError as e:
+    except sqlite3.OperationalError:
         conn.close()
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        # Fallback in case table doesn't exist
+        crawler.run_crawler()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM weather_observations")
+        rows = cursor.fetchall()
         
     stations = []
     latest_obs_time = None
@@ -99,48 +77,49 @@ async def get_latest_temperature():
         "stations": stations
     }
 
-@app.get("/api/health")
-async def get_health():
-    """GET /api/health - Returns CWA cache and database status."""
-    db_exists = os.path.exists(DB_FILE)
-    latest_time = None
-    cache_status = "stale"
+def main_app():
+    """Main PyWebIO Web Application Entry Point."""
+    # Set PyWebIO page title
+    pywebio.session.set_env(title="臺灣即時氣象觀測與 Windy 視覺化地圖")
     
-    if db_exists:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        try:
-            cursor.execute("SELECT MAX(obs_time) FROM weather_observations")
-            latest_time = cursor.fetchone()[0]
-            cache_status = "fresh" if latest_time else "empty"
-        except Exception:
-            pass
-        conn.close()
+    # Clear the PyWebIO session
+    clear()
+    
+    # 1. Fetch latest data from database
+    weather_data = get_latest_temperature_data()
+    
+    # 2. Read templates/index.html
+    with open("templates/index.html", "r", encoding="utf-8") as f:
+        html_template = f.read()
         
-    return {
-        "status": "ok" if db_exists else "initializing",
-        "cwa_cache_status": cache_status,
-        "latest_cwa_time": latest_time
-    }
-
-@app.get("/api/config")
-async def get_config():
-    """Returns frontend public configuration (like Windy API Key)."""
-    # Look for WINDY_API_KEY in .env or environment
+    # 3. Inject CWA weather data and Windy API Key as global JS variables
     windy_key = os.environ.get("WINDY_API_KEY") or os.environ.get("NEXT_PUBLIC_WINDY_API_KEY") or ""
-    return {
-        "windy_api_key": windy_key
-    }
-
-@app.post("/api/refresh")
-async def refresh_weather():
-    """API endpoint to trigger crawler refresh."""
-    try:
-        crawler.run_crawler()
-        return await get_latest_temperature()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    
+    injected_js = f"""
+    <script>
+        window.initialWeatherData = {json.dumps(weather_data)};
+        window.windyApiKey = "{windy_key}";
+    </script>
+    """
+    
+    html_content = html_template.replace("</head>", injected_js + "</head>")
+    
+    # 4. Render the dashboard layout via put_html()
+    put_html(html_content)
+    
+    # 5. Render a hidden PyWebIO button to handle asynchronous JS sync/refresh actions
+    def handle_refresh():
+        try:
+            crawler.run_crawler()
+            # Force browser reload to get fresh CWA data
+            pywebio.session.run_js("window.location.reload();")
+        except Exception as e:
+            pywebio.session.run_js(f"alert('Refresh failed: {str(e)}');")
+            
+    put_buttons(['pywebio_refresh'], onclick=[handle_refresh]).style('display: none;')
+    
+    # Keep session alive to handle onclick callbacks
+    pywebio.session.hold()
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("app:app", host="127.0.0.1", port=5000, reload=True)
+    start_server(main_app, host="127.0.0.1", port=5000, debug=True, static_dir="static")

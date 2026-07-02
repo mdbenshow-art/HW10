@@ -75,6 +75,21 @@ function initCollapsibleTable() {
 
 // Main Ingestion Workflow
 async function loadDashboard() {
+    // Check if data is already injected by PyWebIO
+    if (window.initialWeatherData) {
+        allStations = window.initialWeatherData.stations;
+        populateCountyFilter(allStations);
+        renderExtremes(allStations);
+        renderTable(allStations);
+        
+        const windyKey = window.windyApiKey || "";
+        initOrUpdateMap(windyKey, allStations);
+        
+        document.getElementById('last-update-time').innerText = `資料時間：${formatTime(window.initialWeatherData.updated_at)}`;
+        document.getElementById('cache-status').innerText = `系統狀態：觀測中 (${allStations.length} 站)`;
+        return;
+    }
+
     toggleLoading(true, "正在獲取氣象署即時觀測數據...");
     
     try {
@@ -346,7 +361,13 @@ function setupMapListeners() {
     
     // Manual sync refresh
     document.getElementById('refresh-btn').addEventListener('click', () => {
-        refreshWeatherData();
+        const pyBtn = document.querySelector('button[value="pywebio_refresh"]');
+        if (pyBtn) {
+            toggleLoading(true, "正在與中央氣象署同步最新測站數據...");
+            pyBtn.click();
+        } else {
+            refreshWeatherData();
+        }
     });
     
     // Setup Windy background switcher if Windy is running, otherwise use Leaflet simulation
