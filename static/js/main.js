@@ -31,14 +31,20 @@ let currentBaseTileLayer = null;
 let rainRadarLayer = null;
 
 // Initial Entry
-document.addEventListener('DOMContentLoaded', () => {
+if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    initDashboard();
+} else {
+    document.addEventListener('DOMContentLoaded', initDashboard);
+}
+
+function initDashboard() {
     initLegend();
     initCollapsibleTable();
     loadDashboard();
     
     // Auto refresh every 5 minutes
     setInterval(loadDashboard, 300000);
-});
+}
 
 // Build Legend UI
 function initLegend() {

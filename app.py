@@ -104,10 +104,39 @@ def main_app():
     
     html_content = html_template.replace("</head>", injected_js + "</head>")
     
+    # Remove standard script tag loads from HTML body/head to prevent innerHTML blocking issues
+    html_content = html_content.replace('<script src="https://unpkg.com/leaflet@1.4.0/dist/leaflet.js"></script>', '')
+    html_content = html_content.replace('<script src="https://api.windy.com/assets/map-forecast/libBoot.js"></script>', '')
+    html_content = html_content.replace('<script src="/static/js/main.js" defer></script>', '')
+    
     # 4. Render the dashboard layout via put_html()
     put_html(html_content)
     
-    # 5. Render a hidden PyWebIO button to handle asynchronous JS sync/refresh actions
+    # 5. Load Leaflet, Windy and main.js dynamically to guarantee execution in PyWebIO SPA
+    pywebio.session.run_js("""
+        function loadScript(src) {
+            return new Promise((resolve, reject) => {
+                let script = document.createElement('script');
+                script.src = src;
+                script.onload = () => resolve();
+                script.onerror = () => reject(new Error('Failed to load ' + src));
+                document.body.appendChild(script);
+            });
+        }
+        
+        // Sequentially load dependencies to prevent race conditions
+        loadScript('https://unpkg.com/leaflet@1.4.0/dist/leaflet.js')
+            .then(() => loadScript('https://api.windy.com/assets/map-forecast/libBoot.js'))
+            .then(() => loadScript('/static/js/main.js'))
+            .then(() => {
+                console.log("All scripts dynamically executed successfully in PyWebIO!");
+            })
+            .catch(err => {
+                console.error("Script load error:", err);
+            });
+    """)
+    
+    # 6. Render a hidden PyWebIO button to handle asynchronous JS sync/refresh actions
     def handle_refresh():
         try:
             crawler.run_crawler()
