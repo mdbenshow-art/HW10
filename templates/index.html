@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>臺灣即時氣象觀測與 Windy 視覺化地圖</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700;900&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.4.0/dist/leaflet.css" />
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.4.0/dist/leaflet.js"></script>
+    <!-- Windy Map Forecast API Boot -->
+    <script src="https://api.windy.com/assets/map-forecast/libBoot.js"></script>
+    <!-- Custom JS -->
+    <script src="/static/js/main.js" defer></script>
+</head>
+<body>
+    <!-- Warm Background Glow Effects -->
+    <div class="bg-glow bg-glow-1"></div>
+    <div class="bg-glow bg-glow-2"></div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="glass-card">
+            <div class="header-logo">
+                <i class="fa-solid fa-fire weather-logo-icon"></i>
+                <div class="logo-text">
+                    <h1>臺灣即時溫度廣播與氣象觀測儀表板</h1>
+                    <p>Taiwan CWA Temp Observation & Windy Visualization</p>
+                </div>
+            </div>
+            <div class="header-actions">
+                <div class="status-indicator">
+                    <span class="status-dot green"></span>
+                    <span id="cache-status">系統狀態：正常</span>
+                </div>
+                <span class="update-time" id="last-update-time">資料時間：載入中...</span>
+                <button class="btn btn-refresh" id="refresh-btn">
+                    <i class="fa-solid fa-rotate"></i> <span>同步刷新</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <div class="workspace">
+            <!-- Sidebar Controls -->
+            <aside class="sidebar-panel">
+                <!-- Search & Filters -->
+                <div class="glass-card panel-card">
+                    <div class="card-header-accent">
+                        <i class="fa-solid fa-sliders"></i> <h3>觀測控制台</h3>
+                    </div>
+                    <div class="panel-body">
+                        <!-- Search Box -->
+                        <div class="form-group">
+                            <label for="search-input"><i class="fa-solid fa-magnifying-glass"></i> 搜尋測站 / 縣市</label>
+                            <input type="text" id="search-input" placeholder="輸入站名，如「臺北」...">
+                        </div>
+                        
+                        <!-- County Filter -->
+                        <div class="form-group">
+                            <label for="county-select"><i class="fa-solid fa-map-location-dot"></i> 縣市區域篩選</label>
+                            <select id="county-select">
+                                <option value="all">-- 顯示全台灣所有測站 --</option>
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+                        
+                        <!-- Map Layer Toggles -->
+                        <div class="form-group">
+                            <label><i class="fa-solid fa-layer-group"></i> 地圖顯示設定</label>
+                            <div class="toggle-container">
+                                <label class="switch-label">
+                                    <input type="checkbox" id="toggle-labels" checked>
+                                    <span class="slider-round"></span>
+                                    顯示站點溫度數值標籤
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Windy Layer Switcher -->
+                        <div class="form-group">
+                            <label><i class="fa-solid fa-cloud-sun"></i> Windy 背景氣象層</label>
+                            <div class="windy-layer-grid">
+                                <button class="windy-layer-btn active" data-overlay="wind">
+                                    <i class="fa-solid fa-wind"></i> 風速
+                                </button>
+                                <button class="windy-layer-btn" data-overlay="temp">
+                                    <i class="fa-solid fa-temperature-half"></i> 氣溫
+                                </button>
+                                <button class="windy-layer-btn" data-overlay="rain">
+                                    <i class="fa-solid fa-cloud-showers-heavy"></i> 降雨
+                                </button>
+                                <button class="windy-layer-btn" data-overlay="clouds">
+                                    <i class="fa-solid fa-cloud"></i> 雲量
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Temperature Range Legend -->
+                <div class="glass-card panel-card">
+                    <div class="card-header-accent">
+                        <i class="fa-solid fa-palette"></i> <h3>觀測溫度圖例 (CWA)</h3>
+                    </div>
+                    <div class="panel-body">
+                        <div class="legend-grid" id="temp-legend">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Extremes & Hotspots -->
+                <div class="glass-card panel-card">
+                    <div class="card-header-accent">
+                        <i class="fa-solid fa-temperature-arrow-up"></i> <h3>今日溫度極值排行</h3>
+                    </div>
+                    <div class="panel-body">
+                        <div class="extremes-section">
+                            <h4><i class="fa-solid fa-fire" style="color: #ef4444;"></i> 高溫排行榜 Top 5</h4>
+                            <ol class="extremes-list" id="hottest-list">
+                                <!-- Populated dynamically -->
+                            </ol>
+                        </div>
+                        <div class="extremes-section">
+                            <h4><i class="fa-solid fa-snowflake" style="color: #3b82f6;"></i> 低溫排行榜 Top 5</h4>
+                            <ol class="extremes-list" id="coldest-list">
+                                <!-- Populated dynamically -->
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Map Viewport -->
+            <main class="map-container glass-card">
+                <!-- Loading Map Overlay -->
+                <div class="loading-overlay" id="loading-spinner">
+                    <div class="spinner"></div>
+                    <p id="loading-text">正在讀取中央氣象署即時觀測數據...</p>
+                </div>
+                
+                <!-- Windy Map Container -->
+                <div id="windy"></div>
+                
+                <!-- Map Header Overlay (e.g. Taiwan Weather Context) -->
+                <div class="map-context-badge">
+                    <span id="map-status-text"><i class="fa-solid fa-earth-asia"></i> 載入中...</span>
+                </div>
+            </main>
+        </div>
+
+        <!-- Tabular Detail View -->
+        <section class="tabular-section glass-card">
+            <div class="tabular-header" id="table-toggle-btn">
+                <div class="header-left">
+                    <i class="fa-solid fa-table-list"></i>
+                    <h3>全台觀測站詳細數據表 (<span id="total-stations-count">0</span> 站)</h3>
+                </div>
+                <div class="header-right">
+                    <span class="collapse-tip">點擊展開 / 收合列表 <i class="fa-solid fa-chevron-down" id="table-arrow"></i></span>
+                </div>
+            </div>
+            
+            <div class="tabular-body collapsed" id="table-body-container">
+                <div class="table-responsive">
+                    <table class="station-table">
+                        <thead>
+                            <tr>
+                                <th>測站代號</th>
+                                <th>測站名稱</th>
+                                <th>縣市</th>
+                                <th>鄉鎮區</th>
+                                <th>海拔</th>
+                                <th>即時氣溫</th>
+                                <th>相對濕度</th>
+                                <th>即時風速</th>
+                                <th>降雨量</th>
+                                <th>觀測時間</th>
+                            </tr>
+                        </thead>
+                        <tbody id="station-rows-container">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer>
+            <p>© 2026 臺灣即時氣象溫度廣播觀測系統 - CWA OpenData & Windy Forecast Map API 整合</p>
+            <p class="data-source">資料更新週期：每 10 分鐘同步一次 • 資料來源：交通部中央氣象署</p>
+        </footer>
+    </div>
+
+    <!-- Floating Toast Alert -->
+    <div class="floating-alert" id="toast-alert">
+        <i class="fa-solid fa-circle-check"></i> <span id="toast-message">更新成功</span>
+    </div>
+</body>
+</html>

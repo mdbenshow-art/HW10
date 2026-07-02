@@ -1,0 +1,18 @@
+# Environment variables
+.env
+.env.local
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local Database & CSV Cache
+weather.db
+weather_data.csv
+
+# IDEs
+.vscode/
+.idea/
+.gemini/
